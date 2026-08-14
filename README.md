@@ -10,7 +10,7 @@ This package currently targets Node.js through Node-API. Bun can load the same N
 - Runtime target: Node.js 20+
 - Source language: TypeScript
 - Native boundary: Node-API, no `node-addon-api` dependency
-- KoutenDB core: local C ABI v2 shared library, KoutenDB core v0.3.0+
+- KoutenDB core: local C ABI v2 shared library; v0.12-compatible build required for persistence/maintenance APIs
 - Bun: experimental, local demo/test path available
 
 ## Install
@@ -193,7 +193,7 @@ verification; the underlying failure is unchanged.
 Implemented in this driver:
 
 - Embedded open: `KoutenDb.open(nodes)`
-- Persistent embedded open: `KoutenDb.openDir(nodes, dir)`
+- Persistent embedded open: `KoutenDb.openDir(nodes, dir)`, `openDirWith(dir, options)` for strong durability / disk-backed reads
 - TCP connect: `KoutenDb.connect(peers, options?)`
 - Auth connect: username, password, auth token, secret key, galaxy
 - TLS connect: `tls`, `tlsCaFile`, `tlsServerName`, `dangerouslyAcceptInvalidCerts`
@@ -201,7 +201,8 @@ Implemented in this driver:
 - Write: `put`, `putCodec`, `putJson`, `putNif`, `putBif`, `putVec`,
   `putVecCodec`, `putJsonVec`, `putNifVec`, `putBifVec`
 - Read: `get`, `getEncoded`, `getString`, `batchGet`, `batchGetStrings`,
-  `readRing`
+  `readRing`, `exists`
+- Mutations: `update`, `updateCodec`, `updateJson`, `remove`
 - Payload codecs: `PayloadCodec`, `EncodedPayload`
 - ID helpers: `parseKoutenId`, `formatKoutenId`
 - Typed errors: `KoutenDbError`, `isKoutenDbError`
@@ -210,12 +211,17 @@ Implemented in this driver:
 - Atlas / map output: `atlas`
 - Orbit helpers: `locate`, `now`, `advance`, `nextVisit`, `nextJoin`
 - Metadata: `configureRing`, `setGalaxyDescription`, `setRingDescription`
+- Metrics: `metrics`, `checkpointMetrics`
+- Segment maintenance: `segmentStatus`, `planSegmentMaintenance`,
+  `runSegmentMaintenance`, `segmentMaintenanceStatus`, `recoverSegmentMaintenance`
+- Generation checkpoints: `createCheckpoint`, `checkpointStatus`,
+  `listCheckpoints`, `cleanupCheckpoints`, `restoreCheckpoint`
 
 Still pending:
 
 - Native JavaScript transaction helpers
 - Dump/import helpers
-- Metrics helpers
+- Patch / list / count helpers (not yet exposed by C ABI v2)
 - Stronger Bun CI coverage
 - Browser / React Native support through a future Wasm package
 

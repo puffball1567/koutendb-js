@@ -79,6 +79,34 @@ double DoubleArg(napi_env env, napi_value value) {
   return out;
 }
 
+int64_t Int64Arg(napi_env env, napi_value value) {
+  int64_t out = 0;
+  napi_valuetype type;
+  napi_typeof(env, value, &type);
+  if (type == napi_bigint) {
+    bool lossless = false;
+    napi_get_value_bigint_int64(env, value, &out, &lossless);
+    if (!lossless) {
+      Throw(env, "integer budget is outside int64 range");
+      return -1;
+    }
+  } else {
+    napi_get_value_int64(env, value, &out);
+  }
+  return out;
+}
+
+napi_value TextResult(napi_env env, void *p, size_t len) {
+  if (p == nullptr) {
+    ThrowLast(env);
+    return nullptr;
+  }
+  napi_value out;
+  napi_create_string_utf8(env, reinterpret_cast<const char *>(p), len, &out);
+  kouten_free(p);
+  return out;
+}
+
 DbHandle *DbArg(napi_env env, napi_value value) {
   DbHandle *handle = nullptr;
   napi_get_value_external(env, value, reinterpret_cast<void **>(&handle));
@@ -291,6 +319,19 @@ napi_value OpenDir(napi_env env, napi_callback_info info) {
   return ExternalDb(env, kouten_open_dir(nodes, dir.c_str()));
 }
 
+napi_value OpenDirOptions(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value args[4];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 4) {
+    Throw(env, "openDirOptions requires nodes, dir, strongDurability, and diskBacked");
+    return nullptr;
+  }
+  std::string dir = StringArg(env, args[1]);
+  return ExternalDb(env, kouten_open_dir_options(
+      IntArg(env, args[0]), dir.c_str(), IntArg(env, args[2]), IntArg(env, args[3])));
+}
+
 napi_value Connect(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value args[1];
@@ -473,6 +514,66 @@ napi_value GetEncoded(napi_env env, napi_callback_info info) {
   napi_set_named_property(env, out, "data", data);
   napi_set_named_property(env, out, "codec", CodecString(env, codec));
   return out;
+}
+
+napi_value Exists(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value args[2];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 2) {
+    Throw(env, "exists requires db and id");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  int rc = kouten_exists(handle->db, IdArg(env, args[1]));
+  if (rc < 0) {
+    ThrowLast(env);
+    return nullptr;
+  }
+  napi_value out;
+  napi_get_boolean(env, rc != 0, &out);
+  return out;
+}
+
+napi_value Update(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value args[4];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 3) {
+    Throw(env, "update requires db, id, and data");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  std::string storage;
+  BytesArg data = DataArg(env, args[2], storage);
+  int rc = argc >= 4
+      ? kouten_update_codec(handle->db, IdArg(env, args[1]), data.data, data.len,
+                            IntArg(env, args[3]))
+      : kouten_update(handle->db, IdArg(env, args[1]), data.data, data.len);
+  if (rc != KOUTEN_OK) {
+    ThrowLast(env);
+    return nullptr;
+  }
+  return Undefined(env);
+}
+
+napi_value Remove(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value args[2];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 2) {
+    Throw(env, "remove requires db and id");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  if (kouten_remove(handle->db, IdArg(env, args[1])) != KOUTEN_OK) {
+    ThrowLast(env);
+    return nullptr;
+  }
+  return Undefined(env);
 }
 
 napi_value BatchGet(napi_env env, napi_callback_info info) {
@@ -677,6 +778,170 @@ napi_value Atlas(napi_env env, napi_callback_info info) {
   return str;
 }
 
+napi_value Metrics(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value args[2];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 2) {
+    Throw(env, "metrics requires db and format");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  size_t len = 0;
+  void *p = kouten_metrics_text(handle->db, IntArg(env, args[1]), &len);
+  return TextResult(env, p, len);
+}
+
+napi_value SegmentStatus(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value args[3];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 3) {
+    Throw(env, "segmentStatus requires db, staleRatio, and minStaleRecords");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  size_t len = 0;
+  void *p = kouten_segment_status_json(
+      handle->db, DoubleArg(env, args[1]), IntArg(env, args[2]), &len);
+  return TextResult(env, p, len);
+}
+
+napi_value SegmentMaintenance(napi_env env, napi_callback_info info, bool run) {
+  size_t argc = 6;
+  napi_value args[6];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 6) {
+    Throw(env, "segment maintenance requires db and five policy values");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  size_t len = 0;
+  void *p = run
+      ? kouten_segment_maintenance_run_json(
+            handle->db, DoubleArg(env, args[1]), IntArg(env, args[2]),
+            IntArg(env, args[3]), Int64Arg(env, args[4]), Int64Arg(env, args[5]), &len)
+      : kouten_segment_maintenance_plan_json(
+            handle->db, DoubleArg(env, args[1]), IntArg(env, args[2]),
+            IntArg(env, args[3]), Int64Arg(env, args[4]), Int64Arg(env, args[5]), &len);
+  return TextResult(env, p, len);
+}
+
+napi_value SegmentMaintenancePlan(napi_env env, napi_callback_info info) {
+  return SegmentMaintenance(env, info, false);
+}
+
+napi_value SegmentMaintenanceRun(napi_env env, napi_callback_info info) {
+  return SegmentMaintenance(env, info, true);
+}
+
+napi_value SegmentMaintenanceStatus(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value args[1];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 1) {
+    Throw(env, "segmentMaintenanceStatus requires db");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  size_t len = 0;
+  void *p = kouten_segment_maintenance_status_json(handle->db, &len);
+  return TextResult(env, p, len);
+}
+
+napi_value SegmentMaintenanceRecover(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value args[1];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 1) {
+    Throw(env, "segmentMaintenanceRecover requires db");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  int recovered = 0;
+  if (kouten_segment_maintenance_recover(handle->db, &recovered) != KOUTEN_OK) {
+    ThrowLast(env);
+    return nullptr;
+  }
+  napi_value out;
+  napi_get_boolean(env, recovered != 0, &out);
+  return out;
+}
+
+napi_value CheckpointCreate(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value args[3];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 3) {
+    Throw(env, "checkpointCreate requires db, root, and checkpointId");
+    return nullptr;
+  }
+  DbHandle *handle = DbArg(env, args[0]);
+  if (handle == nullptr) return nullptr;
+  std::string root = StringArg(env, args[1]);
+  std::string id = StringArg(env, args[2]);
+  size_t len = 0;
+  void *p = kouten_checkpoint_create_json(
+      handle->db, root.empty() ? nullptr : root.c_str(),
+      id.empty() ? nullptr : id.c_str(), &len);
+  return TextResult(env, p, len);
+}
+
+napi_value CheckpointPathCall(napi_env env, napi_callback_info info, int operation) {
+  size_t argc = 3;
+  napi_value args[3];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 1) {
+    Throw(env, "checkpoint operation requires a path");
+    return nullptr;
+  }
+  if ((operation == 2 || operation == 4) && argc < 2) {
+    Throw(env, "checkpoint operation requires a second argument");
+    return nullptr;
+  }
+  if (operation == 3 && argc < 3) {
+    Throw(env, "checkpoint restore requires checkpointDir, dataDir, and overwrite");
+    return nullptr;
+  }
+  std::string first = StringArg(env, args[0]);
+  size_t len = 0;
+  void *p = nullptr;
+  if (operation == 0) {
+    p = kouten_checkpoint_status_json(first.c_str(), &len);
+  } else if (operation == 1) {
+    p = kouten_checkpoint_list_json(first.c_str(), &len);
+  } else if (operation == 2) {
+    p = kouten_checkpoint_cleanup_json(first.c_str(), IntArg(env, args[1]), &len);
+  } else if (operation == 3) {
+    std::string second = StringArg(env, args[1]);
+    p = kouten_checkpoint_restore_json(first.c_str(), second.c_str(), IntArg(env, args[2]), &len);
+  } else {
+    p = kouten_checkpoint_metrics_text(first.c_str(), IntArg(env, args[1]), &len);
+  }
+  return TextResult(env, p, len);
+}
+
+napi_value CheckpointStatus(napi_env env, napi_callback_info info) {
+  return CheckpointPathCall(env, info, 0);
+}
+napi_value CheckpointList(napi_env env, napi_callback_info info) {
+  return CheckpointPathCall(env, info, 1);
+}
+napi_value CheckpointCleanup(napi_env env, napi_callback_info info) {
+  return CheckpointPathCall(env, info, 2);
+}
+napi_value CheckpointRestore(napi_env env, napi_callback_info info) {
+  return CheckpointPathCall(env, info, 3);
+}
+napi_value CheckpointMetrics(napi_env env, napi_callback_info info) {
+  return CheckpointPathCall(env, info, 4);
+}
+
 napi_value Locate(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value args[3];
@@ -819,6 +1084,7 @@ napi_value Init(napi_env env, napi_value exports) {
   napi_property_descriptor props[] = {
     {"open", nullptr, Open, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"openDir", nullptr, OpenDir, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"openDirOptions", nullptr, OpenDirOptions, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"connect", nullptr, Connect, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"connectAuth", nullptr, ConnectAuth, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"connectAuthTls", nullptr, ConnectAuthTls, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -828,11 +1094,26 @@ napi_value Init(napi_env env, napi_value exports) {
     {"putCodec", nullptr, PutCodec, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"get", nullptr, Get, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"getEncoded", nullptr, GetEncoded, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"exists", nullptr, Exists, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"update", nullptr, Update, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"remove", nullptr, Remove, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"batchGet", nullptr, BatchGet, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"query", nullptr, Query, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"readRingJson", nullptr, ReadRingJson, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"retrieve", nullptr, Retrieve, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"atlas", nullptr, Atlas, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"metrics", nullptr, Metrics, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"segmentStatus", nullptr, SegmentStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"segmentMaintenancePlan", nullptr, SegmentMaintenancePlan, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"segmentMaintenanceRun", nullptr, SegmentMaintenanceRun, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"segmentMaintenanceStatus", nullptr, SegmentMaintenanceStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"segmentMaintenanceRecover", nullptr, SegmentMaintenanceRecover, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointCreate", nullptr, CheckpointCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointStatus", nullptr, CheckpointStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointList", nullptr, CheckpointList, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointCleanup", nullptr, CheckpointCleanup, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointRestore", nullptr, CheckpointRestore, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"checkpointMetrics", nullptr, CheckpointMetrics, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"locate", nullptr, Locate, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"now", nullptr, Now, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"advance", nullptr, Advance, nullptr, nullptr, nullptr, napi_default, nullptr},
