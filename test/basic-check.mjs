@@ -5,6 +5,9 @@ import {
   parseKoutenId,
   KoutenDb,
 } from "../dist/index.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export function runEmbeddedCheck(assert) {
   const db = KoutenDb.open(4);
@@ -104,4 +107,61 @@ export function runApiCheck(assert) {
     () => db.put("closed/test", "payload"),
     (error) => isKoutenDbError(error) && error.kind === "closed",
   );
+}
+
+export function runV012Check(assert) {
+  const root = mkdtempSync(join(tmpdir(), "koutendb-js-v012-"));
+  const checkpoints = `${root}-checkpoints`;
+  const restored = `${root}-restored`;
+  const db = KoutenDb.openDirWith(root, {
+    nodes: 1,
+    strongDurability: true,
+    diskBacked: true,
+  });
+  let id;
+  try {
+    id = db.put("docs/mutable", "before");
+    assert.equal(db.exists(id), true);
+    db.updateJson(id, { state: "after" });
+    assert.equal(db.getEncoded(id).codec, "json");
+    assert.match(db.metrics("prometheus"), /koutendb_items/);
+
+    const policy = {
+      staleRatio: 0,
+      minStaleRecords: 0,
+      maxRings: 1,
+      maxBytes: 1024 * 1024,
+      maxElapsedMs: 1000,
+    };
+    assert.equal(typeof db.planSegmentMaintenance(policy), "object");
+    assert.equal(typeof db.runSegmentMaintenance(policy), "object");
+    assert.equal(typeof db.segmentStatus(0, 0), "object");
+    assert.equal(db.recoverSegmentMaintenance(), false);
+    assert.equal(db.createCheckpoint(checkpoints, "js-1").verified, true);
+    assert.equal(KoutenDb.checkpointStatus(join(checkpoints, "js-1")).reason, "verified");
+    assert.equal(KoutenDb.listCheckpoints(checkpoints).count, 1);
+    assert.match(KoutenDb.checkpointMetrics(checkpoints, "openmetrics"), /# EOF/);
+  } finally {
+    db.close();
+  }
+
+  try {
+    KoutenDb.restoreCheckpoint(join(checkpoints, "js-1"), restored);
+    const restoredDb = KoutenDb.openDirWith(restored, {
+      nodes: 1,
+      strongDurability: true,
+      diskBacked: true,
+    });
+    try {
+      assert.equal(restoredDb.exists(id), true);
+      restoredDb.remove(id);
+      assert.equal(restoredDb.exists(id), false);
+    } finally {
+      restoredDb.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(checkpoints, { recursive: true, force: true });
+    rmSync(restored, { recursive: true, force: true });
+  }
 }

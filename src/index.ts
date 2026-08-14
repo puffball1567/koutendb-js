@@ -87,6 +87,22 @@ export interface ConnectOptions {
   dangerouslyAcceptInvalidCerts?: boolean;
 }
 
+export interface OpenDirOptions {
+  nodes?: number;
+  strongDurability?: boolean;
+  diskBacked?: boolean;
+}
+
+export type MetricsFormat = "key-value" | "prometheus" | "openmetrics";
+
+export interface SegmentMaintenancePolicy {
+  staleRatio?: number;
+  minStaleRecords?: number;
+  maxRings?: number;
+  maxBytes?: number | bigint;
+  maxElapsedMs?: number | bigint;
+}
+
 export interface RetrieveOptions {
   ring?: string;
   budget?: number;
@@ -160,6 +176,7 @@ export interface RetrieveResult {
 interface NativeBinding {
   open(nodes: number): unknown;
   openDir(nodes: number, dir: string): unknown;
+  openDirOptions(nodes: number, dir: string, strongDurability: number, diskBacked: number): unknown;
   connect(peers: string): unknown;
   connectAuth(
     peers: string,
@@ -193,6 +210,9 @@ interface NativeBinding {
   ): KoutenId;
   get(db: unknown, id: KoutenId): Uint8Array | null;
   getEncoded(db: unknown, id: KoutenId): EncodedPayload | null;
+  exists(db: unknown, id: KoutenId): boolean;
+  update(db: unknown, id: KoutenId, data: Uint8Array | ArrayBuffer | string, codec?: number): void;
+  remove(db: unknown, id: KoutenId): void;
   batchGet(db: unknown, ids: KoutenId[]): Array<Uint8Array | null>;
   query(db: unknown, id: KoutenId, selection: string): Uint8Array;
   readRingJson(
@@ -217,6 +237,18 @@ interface NativeBinding {
     focus: number,
   ): RetrieveResult;
   atlas(db: unknown, vec: Float32Array | undefined, maxCentroidDims: number): string;
+  metrics(db: unknown, format: number): string;
+  segmentStatus(db: unknown, staleRatio: number, minStaleRecords: number): string;
+  segmentMaintenancePlan(db: unknown, staleRatio: number, minStaleRecords: number, maxRings: number, maxBytes: number | bigint, maxElapsedMs: number | bigint): string;
+  segmentMaintenanceRun(db: unknown, staleRatio: number, minStaleRecords: number, maxRings: number, maxBytes: number | bigint, maxElapsedMs: number | bigint): string;
+  segmentMaintenanceStatus(db: unknown): string;
+  segmentMaintenanceRecover(db: unknown): boolean;
+  checkpointCreate(db: unknown, root: string, checkpointId: string): string;
+  checkpointStatus(checkpointDir: string): string;
+  checkpointList(root: string): string;
+  checkpointCleanup(root: string, keep: number): string;
+  checkpointRestore(checkpointDir: string, dataDir: string, overwrite: number): string;
+  checkpointMetrics(root: string, format: number): string;
   locate(db: unknown, id: KoutenId, at: number): number;
   now(db: unknown): number;
   advance(db: unknown, dt: number): void;
@@ -327,6 +359,22 @@ function codecCode(codec: PayloadCodec): number {
   }
 }
 
+function metricsFormatCode(format: MetricsFormat): number {
+  switch (format) {
+    case "key-value": return 0;
+    case "prometheus": return 1;
+    case "openmetrics": return 2;
+  }
+}
+
+function parseNativeJson(raw: string, operation: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new KoutenDbError("utf8", `KoutenDB ${operation} returned invalid JSON`, error);
+  }
+}
+
 export class KoutenDb {
   #handle: unknown;
   #closed = false;
@@ -341,6 +389,15 @@ export class KoutenDb {
 
   static openDir(nodes: number, dir: string): KoutenDb {
     return wrapNative(() => new KoutenDb(native.openDir(nodes, dir)));
+  }
+
+  static openDirWith(dir: string, options: OpenDirOptions = {}): KoutenDb {
+    return wrapNative(() => new KoutenDb(native.openDirOptions(
+      options.nodes ?? 8,
+      dir,
+      options.strongDurability === true ? 1 : 0,
+      options.diskBacked === true ? 1 : 0,
+    )));
   }
 
   static connect(peers: string, options: ConnectOptions = {}): KoutenDb {
@@ -457,6 +514,26 @@ export class KoutenDb {
     return value === null ? null : new TextDecoder().decode(value);
   }
 
+  exists(id: KoutenId): boolean {
+    return wrapNative(() => native.exists(this.#handle, id));
+  }
+
+  update(id: KoutenId, data: string | Uint8Array | ArrayBuffer): void {
+    wrapNative(() => native.update(this.#handle, id, bytes(data)));
+  }
+
+  updateCodec(id: KoutenId, data: string | Uint8Array | ArrayBuffer, codec: PayloadCodec): void {
+    wrapNative(() => native.update(this.#handle, id, bytes(data), codecCode(codec)));
+  }
+
+  updateJson(id: KoutenId, value: unknown): void {
+    this.updateCodec(id, JSON.stringify(value), "json");
+  }
+
+  remove(id: KoutenId): void {
+    wrapNative(() => native.remove(this.#handle, id));
+  }
+
   batchGet(ids: KoutenId[]): Array<Uint8Array | null> {
     return wrapNative(() => native.batchGet(this.#handle, ids));
   }
@@ -523,6 +600,78 @@ export class KoutenDb {
     } catch (error) {
       throw new KoutenDbError("utf8", "KoutenDB atlas returned invalid JSON", error);
     }
+  }
+
+  metrics(format: MetricsFormat = "key-value"): string {
+    return wrapNative(() => native.metrics(this.#handle, metricsFormatCode(format)));
+  }
+
+  segmentStatus(staleRatio = 0.25, minStaleRecords = 256): unknown {
+    return parseNativeJson(
+      wrapNative(() => native.segmentStatus(this.#handle, staleRatio, minStaleRecords)),
+      "segmentStatus",
+    );
+  }
+
+  planSegmentMaintenance(policy: SegmentMaintenancePolicy = {}): unknown {
+    return parseNativeJson(this.segmentMaintenance(false, policy), "segmentMaintenancePlan");
+  }
+
+  runSegmentMaintenance(policy: SegmentMaintenancePolicy = {}): unknown {
+    return parseNativeJson(this.segmentMaintenance(true, policy), "segmentMaintenanceRun");
+  }
+
+  segmentMaintenanceStatus(): unknown {
+    return parseNativeJson(
+      wrapNative(() => native.segmentMaintenanceStatus(this.#handle)),
+      "segmentMaintenanceStatus",
+    );
+  }
+
+  recoverSegmentMaintenance(): boolean {
+    return wrapNative(() => native.segmentMaintenanceRecover(this.#handle));
+  }
+
+  createCheckpoint(root?: string, checkpointId?: string): unknown {
+    return parseNativeJson(
+      wrapNative(() => native.checkpointCreate(this.#handle, root ?? "", checkpointId ?? "")),
+      "checkpointCreate",
+    );
+  }
+
+  static checkpointStatus(checkpointDir: string): unknown {
+    return parseNativeJson(wrapNative(() => native.checkpointStatus(checkpointDir)), "checkpointStatus");
+  }
+
+  static listCheckpoints(root: string): unknown {
+    return parseNativeJson(wrapNative(() => native.checkpointList(root)), "checkpointList");
+  }
+
+  static cleanupCheckpoints(root: string, keep: number): unknown {
+    return parseNativeJson(wrapNative(() => native.checkpointCleanup(root, keep)), "checkpointCleanup");
+  }
+
+  static restoreCheckpoint(checkpointDir: string, dataDir: string, overwrite = false): unknown {
+    return parseNativeJson(
+      wrapNative(() => native.checkpointRestore(checkpointDir, dataDir, overwrite ? 1 : 0)),
+      "checkpointRestore",
+    );
+  }
+
+  static checkpointMetrics(root: string, format: MetricsFormat = "key-value"): string {
+    return wrapNative(() => native.checkpointMetrics(root, metricsFormatCode(format)));
+  }
+
+  private segmentMaintenance(run: boolean, policy: SegmentMaintenancePolicy): string {
+    const call = run ? native.segmentMaintenanceRun : native.segmentMaintenancePlan;
+    return wrapNative(() => call(
+      this.#handle,
+      policy.staleRatio ?? 0.25,
+      policy.minStaleRecords ?? 256,
+      policy.maxRings ?? 0,
+      policy.maxBytes ?? 0,
+      policy.maxElapsedMs ?? 0,
+    ));
   }
 
   locate(id: KoutenId, at = -1): number {
