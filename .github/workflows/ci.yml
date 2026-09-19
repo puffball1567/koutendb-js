@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: puffball1567/koutendb
-          ref: v0.12.0
+          ref: e36b424bcfd9cd0dfa24ae121f4b4dd028b0eaac
           path: koutendb-core
 
       - name: Install Node.js
@@ -64,7 +64,7 @@ jobs:
 
       - name: Install libsodium on macOS
         if: runner.os == 'macOS'
-        run: brew install libsodium
+        run: brew install libsodium openssl@3
 
       - name: Configure macOS libsodium paths
         if: runner.os == 'macOS'
@@ -73,12 +73,15 @@ jobs:
           echo "LIBRARY_PATH=$prefix/lib:$LIBRARY_PATH" >> "$GITHUB_ENV"
           echo "CPATH=$prefix/include:$CPATH" >> "$GITHUB_ENV"
           echo "DYLD_LIBRARY_PATH=$prefix/lib:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          ssl="$(brew --prefix openssl@3)"
+          echo "$ssl/bin" >> "$GITHUB_PATH"
+          echo "DYLD_LIBRARY_PATH=$ssl/lib:$prefix/lib" >> "$GITHUB_ENV"
 
       - name: Build KoutenDB C ABI
         run: |
           cd koutendb-core
           nimble install -y
-          nim c --app:lib -d:release --nimcache:/tmp/nimcache_kouten_capi -o:lib/${{ matrix.kouten_lib }} src/koutendb_capi.nim
+          KOUTENDB_CAPI_OUT=lib/${{ matrix.kouten_lib }} bash scripts/build_capi.sh
 
       - name: Install dependencies
         run: npm ci
@@ -87,6 +90,16 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build:ts
+
+      - name: Test native TCP before building the addon
+        run: |
+          npm run test:tcp
+          bash koutendb-core/scripts/native_driver_conformance.sh node "$PWD/test/tcp-adapter.mjs"
+
+      - name: Build embedded addon explicitly
+        run: npm run build:native
+        env:
+          KOUTENDB_CORE_DIR: ${{ github.workspace }}/koutendb-core
 
       - name: Test Node.js driver
         run: npm run test:node

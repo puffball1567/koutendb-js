@@ -2,21 +2,25 @@
 
 JavaScript / TypeScript driver for KoutenDB.
 
-This package currently targets Node.js through Node-API. Bun can load the same Node-API module in the local verification path, but Bun support should remain experimental until it is covered by CI.
+This branch supports native Node.js TCP connections without an addon or
+KoutenDB shared library, alongside the existing Node-API embedded client.
+See [native TCP setup, TLS, errors and embedded installation changes](docs/native-tcp.md).
+The native TCP feature is not yet included in the published package.
 
 ## Status
 
 - Package: `koutendb`
 - Runtime target: Node.js 20+
 - Source language: TypeScript
-- Native boundary: Node-API, no `node-addon-api` dependency
-- KoutenDB core: local C ABI v2 shared library; v0.12-compatible build required for persistence/maintenance APIs
+- Embedded boundary: Node-API, no `node-addon-api` dependency
+- Server mode on this branch: native TCP/TLS, no addon or KoutenDB shared library
+- Embedded core: local C ABI v2 shared library; v0.12-compatible build required for persistence/maintenance APIs
 - Bun: experimental, local demo/test path available
 
 ## Install
 
-This driver is a Node-API addon over the KoutenDB C ABI. Install the JavaScript
-package and make the KoutenDB shared library available before running your app.
+For native TCP use the linked guide above. The following setup is for the
+existing embedded Node-API client, which needs the shared library.
 
 Prerequisites:
 
@@ -33,20 +37,20 @@ Build KoutenDB core first:
 git clone https://github.com/puffball1567/koutendb.git
 cd koutendb
 nimble install -y
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_kouten_capi -o:lib/libkoutendb.so src/koutendb_capi.nim
+bash scripts/build_capi.sh
 ```
 
 Install the package in your application with `KOUTENDB_CORE_DIR` set:
 
 ```sh
 cd /path/to/your-app
-KOUTENDB_CORE_DIR=/path/to/koutendb npm install koutendb
+KOUTENDB_BUILD_NATIVE=1 KOUTENDB_CORE_DIR=/path/to/koutendb npm install koutendb
 ```
 
 If you installed the package before building KoutenDB core, rebuild the native addon:
 
 ```sh
-KOUTENDB_CORE_DIR=/path/to/koutendb npm rebuild koutendb
+KOUTENDB_BUILD_NATIVE=1 KOUTENDB_CORE_DIR=/path/to/koutendb npm rebuild koutendb
 ```
 
 Run your app with the KoutenDB shared library on the dynamic loader path:
@@ -93,7 +97,7 @@ Build the KoutenDB C ABI shared library first:
 
 ```sh
 cd ../koutendb
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_kouten_capi -o:lib/libkoutendb.so src/koutendb_capi.nim
+bash scripts/build_capi.sh
 ```
 
 Then build this driver:

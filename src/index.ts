@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+export * from "./tcp.js";
 
 export interface KoutenId {
   parent: bigint;
@@ -268,7 +269,13 @@ function loadNative(): NativeBinding {
   return require(nativePath) as NativeBinding;
 }
 
-const native = loadNative();
+let cachedNative: NativeBinding | undefined;
+const native = new Proxy({} as NativeBinding, {
+  get(_target, property) {
+    cachedNative ??= loadNative();
+    return Reflect.get(cachedNative, property);
+  },
+});
 
 function parseUint32Part(value: string, name: string): number {
   if (!/^\d+$/.test(value)) {
