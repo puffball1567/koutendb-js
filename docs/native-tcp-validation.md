@@ -18,8 +18,8 @@ core commit `e36b424bcfd9cd0dfa24ae121f4b4dd028b0eaac`:
 - Root import in that consumer: passed without loading an addon.
 - npm audit, including development dependencies: zero reported vulnerabilities at the time of this run.
 
-Linux/macOS workflow coverage is configured but has not yet been run on GitHub
-for this branch. These results are not a release publication, load test or
-long-duration operational certification.
+The GitHub workflow runs the shared conformance matrix on Linux and macOS.
+See the release commit's workflow checks for CI results. The local results above
+are correctness/integration checks, not load or long-duration operational tests.
 
 See [native TCP usage and reproduction commands](native-tcp.md).

@@ -1,6 +1,6 @@
 {
   "name": "koutendb",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "JavaScript / TypeScript driver for KoutenDB",
   "license": "Apache-2.0",
   "homepage": "https://github.com/puffball1567/koutendb",

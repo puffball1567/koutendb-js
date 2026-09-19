@@ -2,10 +2,9 @@
 
 JavaScript / TypeScript driver for KoutenDB.
 
-This branch supports native Node.js TCP connections without an addon or
+Version 0.2.0 supports native Node.js TCP connections without an addon or
 KoutenDB shared library, alongside the existing Node-API embedded client.
 See [native TCP setup, TLS, errors and embedded installation changes](docs/native-tcp.md).
-The native TCP feature is not yet included in the published package.
 
 ## Status
 
@@ -13,7 +12,7 @@ The native TCP feature is not yet included in the published package.
 - Runtime target: Node.js 20+
 - Source language: TypeScript
 - Embedded boundary: Node-API, no `node-addon-api` dependency
-- Server mode on this branch: native TCP/TLS, no addon or KoutenDB shared library
+- Server mode: native TCP/TLS, no addon or KoutenDB shared library
 - Embedded core: local C ABI v2 shared library; v0.12-compatible build required for persistence/maintenance APIs
 - Bun: experimental, local demo/test path available
 

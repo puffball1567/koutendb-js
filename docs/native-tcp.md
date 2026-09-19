@@ -1,12 +1,10 @@
-# Native TCP (Development)
+# Native TCP
 
-This branch adds a TypeScript client using Node's net/tls APIs. TCP-only users
-need neither a native addon, Nim, a C++ compiler nor libkoutendb. The published
-package version has not yet been advanced for this feature.
+Version 0.2.0 adds a TypeScript client using Node's net/tls APIs. TCP-only users
+need neither a native addon, Nim, a C++ compiler nor libkoutendb.
 
 ```sh
-npm install
-npm run build:ts
+npm install koutendb@^0.2.0
 ```
 
 ```ts
